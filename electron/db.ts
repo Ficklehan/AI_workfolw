@@ -237,6 +237,10 @@ export function updateWorkflowSummary(id: string, summary: string) {
 export function getLogs(limit = 100): ExecutionLog[] {
   return data.executionLogs.slice(-limit).reverse()
 }
+export function clearLogs() {
+  data.executionLogs = []
+  save()
+}
 export function addLog(platformId: string | null, action: string, status: string, message: string) {
   data.executionLogs.push({ id: uuidv4(), platformId: platformId || '', action, status, message, createdAt: new Date().toISOString() })
   if (data.executionLogs.length > 500) data.executionLogs = data.executionLogs.slice(-500)

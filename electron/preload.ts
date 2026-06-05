@@ -37,7 +37,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Logs
   listLogs: (limit?: number) => ipcRenderer.invoke('logs:list', limit),
-
+  clearLogs: () => ipcRenderer.invoke('logs:clear'),
   // Schedule
   getSchedule: () => ipcRenderer.invoke('schedule:get'),
   setSchedule: (config: any) => ipcRenderer.invoke('schedule:set', config),

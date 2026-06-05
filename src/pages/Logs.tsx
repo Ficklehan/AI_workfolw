@@ -1,5 +1,5 @@
 import { useStore } from '../store'
-import { CheckCircle, XCircle, Clock, RefreshCw } from 'lucide-react'
+import { CheckCircle, XCircle, Clock, RefreshCw, Trash2 } from 'lucide-react'
 
 const statusIcons: Record<string, any> = {
   success: CheckCircle,
@@ -14,7 +14,12 @@ const statusColors: Record<string, string> = {
 }
 
 export default function Logs() {
-  const { logs, loadLogs } = useStore()
+  const { logs, loadLogs, clearLogs } = useStore()
+
+  const handleClear = async () => {
+    if (!confirm('确定清空所有执行日志吗？')) return
+    await clearLogs()
+  }
 
   return (
     <div>
@@ -23,9 +28,33 @@ export default function Logs() {
           <h2 style={{ fontSize: 20, fontWeight: 700 }}>执行日志</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4 }}>最近 {logs.length} 条记录</p>
         </div>
-        <button className="btn-secondary" onClick={loadLogs} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <RefreshCw size={14} /> 刷新
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn-secondary" onClick={loadLogs} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <RefreshCw size={14} /> 刷新
+          </button>
+          {logs.length > 0 && (
+            <button
+              onClick={handleClear}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 4,
+                padding: '6px 12px', borderRadius: 6,
+                background: 'rgba(239,68,68,0.1)', color: 'var(--danger)',
+                border: '1px solid rgba(239,68,68,0.3)', cursor: 'pointer',
+                fontSize: 13, transition: 'all 0.2s'
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = 'rgba(239,68,68,0.2)'
+                e.currentTarget.style.borderColor = 'var(--danger)'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = 'rgba(239,68,68,0.1)'
+                e.currentTarget.style.borderColor = 'rgba(239,68,68,0.3)'
+              }}
+            >
+              <Trash2 size={14} /> 清空日志
+            </button>
+          )}
+        </div>
       </div>
 
       {logs.length === 0 ? (

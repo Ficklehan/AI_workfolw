@@ -24,6 +24,7 @@ declare global {
       runLLMAnalysis: () => Promise<{ success: boolean; analyzed?: number; error?: string }>
       runLLMReanalyze: () => Promise<{ success: boolean; analyzed?: number; error?: string }>
       listLogs: (limit?: number) => Promise<ExecutionLog[]>
+      clearLogs: () => Promise<{ success: boolean }>
       getSchedule: () => Promise<ScheduleConfig>
       setSchedule: (config: ScheduleConfig) => Promise<ScheduleConfig>
       openUrl: (url: string) => Promise<void>
@@ -51,7 +52,7 @@ interface AppState {
   loadWorkflows: () => Promise<void>
   loadLogs: () => Promise<void>
   setExtracting: (v: boolean) => void
-}
+  clearLogs: () => Promise<void>}
 
 export const useStore = create<AppState>((set, get) => ({
   accounts: [],
@@ -92,6 +93,11 @@ export const useStore = create<AppState>((set, get) => ({
   loadLogs: async () => {
     const logs = await window.api.listLogs(50)
     set({ logs })
+  },
+
+  clearLogs: async () => {
+    await window.api.clearLogs()
+    set({ logs: [] })
   },
 
   setExtracting: (v) => set({ extracting: v })

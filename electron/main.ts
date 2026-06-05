@@ -129,7 +129,7 @@ function registerIPC() {
 
   // ---- Logs ----
   ipcMain.handle('logs:list', (_, limit?) => db.getLogs(limit))
-
+  ipcMain.handle('logs:clear', () => { db.clearLogs(); return { success: true } })
   // ---- Schedule ----
   ipcMain.handle('schedule:get', () => db.getScheduleConfig())
   ipcMain.handle('schedule:set', (_, config: ScheduleConfig) => {
