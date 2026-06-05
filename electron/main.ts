@@ -413,8 +413,11 @@ async function runAllExtractions(): Promise<{ success: number; failed: number; t
         }
 
         // Incremental sync: add new, update changed, remove approved
-        // Filter out entries with empty fdId (header rows, etc.)
-        const validWorkflows = result.workflows.filter(w => w.fdId)
+        // 北森用 url 做标识（SPA 无 fdId），蓝凌用 fdId
+        const isBeisenPlatform = freshPlatform.platformType === 'beisen' || freshPlatform.ssoUrl?.includes('italent.cn')
+        const validWorkflows = isBeisenPlatform
+          ? result.workflows.filter(w => w.fdId || w.url)
+          : result.workflows.filter(w => w.fdId)
         const syncResult = db.syncWorkflowsForPlatform(platform.id, validWorkflows)
         db.addLog(platform.id, 'extract', 'success',
           `同步完成: 新增${syncResult.added} 更新${syncResult.updated} 移除${syncResult.removed}，共${result.workflows.length}条`)
@@ -445,7 +448,10 @@ async function runPlatformExtraction(platformId: string) {
   const result = await extractWorkflows(account, platform)
   if (result.error) return { success: false, error: result.error }
 
-  const validWorkflows = result.workflows.filter(w => w.fdId)
+  const isBeisenPlatform = platform.platformType === 'beisen' || platform.ssoUrl?.includes('italent.cn')
+  const validWorkflows = isBeisenPlatform
+    ? result.workflows.filter(w => w.fdId || w.url)
+    : result.workflows.filter(w => w.fdId)
   const syncResult = db.syncWorkflowsForPlatform(platform.id, validWorkflows)
   db.addLog(platform.id, 'extract', 'success',
     `同步完成: 新增${syncResult.added} 更新${syncResult.updated} 移除${syncResult.removed}`)
@@ -470,32 +476,3 @@ async function runLLMAnalysis(force = false) {
   mainWindow?.webContents.send('workflows-updated')
   return { success: true, analyzed: results.size }
 }
-
-// ---- Approval ----
-ipcMain.handle('workflow:approve', async (_, workflowId: string, action: 'approve' | 'reject', comment?: string) => {
-  const workflows = db.getWorkflows()
-  const workflow = workflows.find(w => w.id === workflowId)
-  if (!workflow) return { success: false, message: '流程不存在' }
-
-  const platform = db.getPlatforms().find(p => p.id === workflow.platformId)
-  if (!platform) return { success: false, message: '平台不存在' }
-
-  const account = db.getAccountById(platform.accountId)
-  if (!account) return { success: false, message: '账号不存在' }
-
-  db.addLog(platform.id, action === 'approve' ? 'approve' : 'reject', 'running',
-    `${account.name} - ${platform.name}: ${action === 'approve' ? '同意' : '驳回'} "${workflow.title}"...`)
-
-  const { approveWorkflow } = await import('./services/approver')
-  const result = await approveWorkflow(account, platform, workflow, action, comment)
-
-  db.addLog(platform.id, action === 'approve' ? 'approve' : 'reject',
-    result.success ? 'success' : 'failed', result.message)
-
-  if (result.success) {
-    // Re-extract to sync workflow status
-    await runPlatformExtraction(platform.id)
-  }
-
-  return result
-})

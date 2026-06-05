@@ -27,10 +27,6 @@ contextBridge.exposeInMainWorld('api', {
   runExtraction: () => ipcRenderer.invoke('extraction:run'),
   runPlatformExtraction: (platformId: string) => ipcRenderer.invoke('extraction:runPlatform', platformId),
 
-  // Approval
-  approveWorkflow: (workflowId: string, action: 'approve' | 'reject', comment?: string) =>
-    ipcRenderer.invoke('workflow:approve', workflowId, action, comment),
-
   // LLM Analysis
   runLLMAnalysis: () => ipcRenderer.invoke('llm:analyze'),
   runLLMReanalyze: () => ipcRenderer.invoke('llm:reanalyze'),

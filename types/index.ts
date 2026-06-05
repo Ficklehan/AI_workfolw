@@ -57,8 +57,3 @@ export interface ScheduleConfig {
   enabled: boolean
   intervalMinutes: number
 }
-
-export interface ApprovalResult {
-  success: boolean
-  message: string
-}

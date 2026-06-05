@@ -57,6 +57,7 @@ export function initDB() {
   }
   migrateEncrypt()
   cleanupOrphanedWorkflows()
+  migrateUrlPatterns()
 }
 
 /** Encrypt any plaintext passwords/API keys left from before encryption was added */
@@ -82,6 +83,33 @@ function cleanupOrphanedWorkflows() {
   const before = data.workflows.length
   data.workflows = data.workflows.filter(w => w.platformId)
   if (data.workflows.length !== before) save()
+}
+
+/** Fix urlPattern and rebuild workflow URLs */
+function migrateUrlPatterns() {
+  let changed = false
+  // Fix urlPattern: replace hardcoded fdId with {fdId}
+  for (const p of data.platforms) {
+    if (p.urlPattern && !p.urlPattern.includes('{fdId}') && /[a-f0-9]{20,}/i.test(p.urlPattern)) {
+      p.urlPattern = p.urlPattern.replace(/[a-f0-9]{20,}/i, '{fdId}')
+      changed = true
+    }
+  }
+  // Rebuild workflow URLs from fdId + urlPattern (蓝凌 OA 专属，北森用 url 做标识不处理)
+  for (const w of data.workflows) {
+    if (!w.fdId || !w.platformId) continue
+    const plat = data.platforms.find(p => p.id === w.platformId)
+    // 北森的 fdId 就是 url，不走 urlPattern 替换
+    if (plat?.platformType === 'beisen' || plat?.ssoUrl?.includes('italent.cn')) continue
+    if (plat?.urlPattern?.includes('{fdId}')) {
+      const correctUrl = plat.urlPattern.replace('{fdId}', w.fdId)
+      if (w.url !== correctUrl) {
+        w.url = correctUrl
+        changed = true
+      }
+    }
+  }
+  if (changed) save()
 }
 
 // ---- Accounts ----
@@ -110,15 +138,27 @@ export function deleteAccount(id: string) {
 }
 
 // ---- Platforms ----
+function normalizeUrlPattern(pattern: string): string {
+  if (!pattern) return pattern
+  // If already has {fdId}, return as-is
+  if (pattern.includes('{fdId}')) return pattern
+  // If contains a long hex string (fdId), replace it with {fdId}
+  return pattern.replace(/[a-f0-9]{20,}/i, '{fdId}')
+}
+
 export function getPlatforms(accountId?: string): Platform[] {
   return accountId ? data.platforms.filter(p => p.accountId === accountId) : data.platforms
 }
 export function createPlatform(p: Omit<Platform, 'id'>): Platform {
-  const np: Platform = { ...p, id: uuidv4() }; data.platforms.push(np); save(); return np
+  const np: Platform = { ...p, id: uuidv4(), urlPattern: normalizeUrlPattern(p.urlPattern) }
+  data.platforms.push(np); save(); return np
 }
 export function updatePlatform(id: string, p: Partial<Platform>) {
   const existing = data.platforms.find(x => x.id === id)
-  if (existing) { Object.assign(existing, p); save() }
+  if (existing) {
+    if (p.urlPattern) p.urlPattern = normalizeUrlPattern(p.urlPattern)
+    Object.assign(existing, p); save()
+  }
 }
 export function deletePlatform(id: string) {
   data.platforms = data.platforms.filter(x => x.id !== id)
@@ -148,6 +188,12 @@ export function deleteLLMConfig(id: string) {
 }
 
 // ---- Workflows ----
+
+/** 获取流程的唯一标识：北森用 url（SPA 无 fdId），蓝凌用 fdId */
+function getWorkflowKey(w: { fdId: string; url: string }): string {
+  return w.fdId || w.url || ''
+}
+
 export function getWorkflows(): Workflow[] {
   return data.workflows.map(w => {
     const p = data.platforms.find(x => x.id === w.platformId)
@@ -156,7 +202,8 @@ export function getWorkflows(): Workflow[] {
   })
 }
 export function upsertWorkflow(w: Omit<Workflow, 'id' | 'extractedAt'>) {
-  const idx = data.workflows.findIndex(x => x.platformId === w.platformId && x.fdId === w.fdId)
+  const wKey = getWorkflowKey(w)
+  const idx = data.workflows.findIndex(x => x.platformId === w.platformId && getWorkflowKey(x) === wKey)
   const now = new Date().toISOString()
   if (idx >= 0) {
     data.workflows[idx] = { ...data.workflows[idx], ...w, extractedAt: now }
@@ -179,15 +226,16 @@ export function syncWorkflowsForPlatform(
   extracted: Omit<Workflow, 'id' | 'extractedAt' | 'llmSummary'>[]
 ): { added: number; updated: number; removed: number } {
   const existing = data.workflows.filter(w => w.platformId === platformId)
-  const existingMap = new Map(existing.map(w => [w.fdId, w]))
-  const extractedFdIds = new Set(extracted.map(w => w.fdId))
+  const existingMap = new Map(existing.map(w => [getWorkflowKey(w), w]))
+  const extractedKeys = new Set(extracted.map(w => getWorkflowKey(w)))
 
   let added = 0, updated = 0
 
   // Upsert extracted workflows
   for (const w of extracted) {
     const now = new Date().toISOString()
-    const old = existingMap.get(w.fdId)
+    const wKey = getWorkflowKey(w)
+    const old = existingMap.get(wKey)
     if (old) {
       // Update if any field changed
       const changed = old.title !== w.title || old.status !== w.status ||
@@ -204,17 +252,18 @@ export function syncWorkflowsForPlatform(
     }
   }
 
-  // Remove workflows no longer in extracted list (skip empty fdId)
+  // Remove workflows no longer in extracted list (skip entries with no key at all)
   const before = data.workflows.length
   data.workflows = data.workflows.filter(w => {
     if (w.platformId !== platformId) return true
-    if (!w.fdId) return false // remove entries with empty fdId
-    return extractedFdIds.has(w.fdId)
+    const wKey = getWorkflowKey(w)
+    if (!wKey) return false // remove entries with no identifier
+    return extractedKeys.has(wKey)
   })
   const removedCount = before - data.workflows.length
 
-  const emptyFdIdCount = extracted.filter(w => !w.fdId).length
-  console.log(`[sync] platform=${platformId.substring(0,8)} existing=${existing.length} extracted=${extracted.length} noFdId=${emptyFdIdCount} added=${added} updated=${updated} removed=${removedCount} total=${data.workflows.length}`)
+  const noKeyCount = extracted.filter(w => !getWorkflowKey(w)).length
+  console.log(`[sync] platform=${platformId.substring(0,8)} existing=${existing.length} extracted=${extracted.length} noKey=${noKeyCount} added=${added} updated=${updated} removed=${removedCount} total=${data.workflows.length}`)
 
   save()
   return { added, updated, removed: removedCount }

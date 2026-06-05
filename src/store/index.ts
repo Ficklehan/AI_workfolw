@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Account, Platform, LLMConfig, Workflow, ExecutionLog, ScheduleConfig, ApprovalResult } from '../../types'
+import type { Account, Platform, LLMConfig, Workflow, ExecutionLog, ScheduleConfig } from '../../types'
 
 declare global {
   interface Window {
@@ -20,7 +20,6 @@ declare global {
       listWorkflows: () => Promise<Workflow[]>
       runExtraction: () => Promise<{ success: number; failed: number; total: number }>
       runPlatformExtraction: (platformId: string) => Promise<any>
-      approveWorkflow: (workflowId: string, action: 'approve' | 'reject', comment?: string) => Promise<ApprovalResult>
       runLLMAnalysis: () => Promise<{ success: boolean; analyzed?: number; error?: string }>
       runLLMReanalyze: () => Promise<{ success: boolean; analyzed?: number; error?: string }>
       listLogs: (limit?: number) => Promise<ExecutionLog[]>

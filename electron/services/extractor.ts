@@ -10,7 +10,7 @@ export interface ExtractResult {
 // Each extraction uses a fresh browser with an isolated context — no shared cookies/tokens between accounts
 export async function extractWorkflows(account: Account, platform: Platform): Promise<ExtractResult> {
   const browser = await chromium.launch({
-    headless: true,
+    headless: false,
     args: ['--disable-blink-features=AutomationControlled', '--no-sandbox']
   })
 
@@ -30,52 +30,170 @@ export async function extractWorkflows(account: Account, platform: Platform): Pr
     await page.waitForTimeout(2000)
     await performLogin(page, account)
 
-    // Step 3: Navigate to workflow list by clicking the view tab
-    await page.waitForTimeout(1500)
-    console.log('[extractor] after login URL:', page.url().substring(0, 100))
+    // Step 3: Navigate to workflow list
+    await page.waitForTimeout(2000)
+    const currentUrl = page.url()
+    console.log('[extractor] after login URL:', currentUrl.substring(0, 100))
 
-    // Determine target view from URL hash
-    const workflowUrl = platform.workflowUrl.replace(/ticket=[^&#]+&?/, '')
-    const hashIdx = workflowUrl.indexOf('#')
-    const targetHash = hashIdx > 0 ? workflowUrl.substring(hashIdx + 1) : ''
+    const isBeisen = platform.platformType === 'beisen' || platform.ssoUrl.includes('italent.cn')
 
-    let viewName = ''
-    if (targetHash.includes('listApproval') || targetHash.includes('mydoc=approval')) viewName = '待办'
-    else if (targetHash.includes('listCreate') || targetHash.includes('mydoc=create')) viewName = '我发起的'
-    else if (targetHash.includes('listReviewed') || targetHash.includes('mydoc=reviewed')) viewName = '我已审的'
+    if (isBeisen) {
+      // 北森: navigate to workflowUrl, then extract from the PCTodoCenter iframe
+      console.log('[extractor] 北森: navigating to workflowUrl')
+      await page.goto(platform.workflowUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await page.waitForTimeout(8000)
 
-    if (viewName) {
-      console.log('[extractor] clicking view tab:', viewName)
-      // Find and click the navigation link for the target view
-      const clickResult = await page.evaluate((name) => {
-        // Try finding links with href containing the view key
-        const viewKey = name === '待办' ? 'listApproval' :
-                        name === '我发起的' ? 'listCreate' :
-                        name === '我已审的' ? 'listReviewed' : ''
-        // Method 1: Find by href
-        if (viewKey) {
-          const links = document.querySelectorAll('a[href*="' + viewKey + '"]')
-          if (links.length > 0) { (links[0] as HTMLElement).click(); return 'href-link: ' + viewKey }
+      // Try extracting from ALL frames (including nested cross-origin iframes)
+      const frames = page.frames()
+      console.log('[extractor] 北森: total frames:', frames.length)
+      frames.forEach((f, i) => console.log(`  [${i}] ${f.url().substring(0, 120)}`))
+
+      // Wait longer for SPA content to load
+      await page.waitForTimeout(5000)
+
+      let allIframeData: any[] = []
+      // 北森 SPA 选择器：待办列表可能是 tr/row 或 div item
+      const BEISEN_SELECTOR = 'tr, [role="row"], [class*="todo"] [class*="item"], [class*="task"] [class*="item"], [class*="list"] [class*="item"], [class*="card"]'
+
+      // 等待 PCTodoCenter 待办数据加载
+      const todoFrame = frames.find(f => f.url().includes('PCTodoCenter'))
+      if (todoFrame) {
+        // 等待 global-task-list-wrapper 有子元素
+        console.log('[extractor] waiting for PCTodoCenter task list to load...')
+        for (let wait = 0; wait < 10; wait++) {
+          await page.waitForTimeout(2000)
+          const childCount = await todoFrame.evaluate(() => {
+            const wrapper = document.querySelector('.global-task-list-wrapper')
+            return wrapper ? wrapper.children.length : -1
+          }).catch(() => -2)
+          console.log(`[extractor] task-list-wrapper children: ${childCount} (wait ${wait + 1})`)
+          if (childCount > 0) break
         }
-        // Method 2: Find by exact text
-        const allEls = document.querySelectorAll('a, li, span, div')
-        for (let i = 0; i < allEls.length; i++) {
-          const text = (allEls[i].textContent || '').trim()
-          if (text === name) { (allEls[i] as HTMLElement).click(); return 'text: ' + name }
+
+        // dump 加载后的 DOM
+        try {
+          const domInfo = await todoFrame.evaluate(() => {
+            const body = document.body
+            if (!body) return '(no body)'
+            const containers: string[] = []
+            const all = body.querySelectorAll('*')
+            for (let i = 0; i < all.length; i++) {
+              const el = all[i] as HTMLElement
+              const cls = el.className || ''
+              const tag = el.tagName.toLowerCase()
+              if (typeof cls === 'string' && (cls.includes('task') || cls.includes('todo') || cls.includes('pending'))) {
+                const childCount = el.children.length
+                const text = (el.innerText || '').substring(0, 80).replace(/\n/g, '|')
+                containers.push(`<${tag} class="${cls.substring(0, 80)}" children=${childCount}> "${text}"`)
+              }
+            }
+            return containers.slice(0, 20).join('\n')
+          })
+          console.log('[extractor] PCTodoCenter task DOM:')
+          domInfo.split('\n').forEach((line: string) => console.log(`  ${line}`))
+        } catch (err: any) {
+          console.log('[extractor] DOM dump error:', err.message?.substring(0, 60))
         }
-        return 'not-found'
-      }, viewName)
-      console.log('[extractor] tab click result:', clickResult)
-      await page.waitForTimeout(3000)
+      }
+
+      for (let fi = 0; fi < frames.length; fi++) {
+        const frame = frames[fi]
+        try {
+          // 等 SPA 内容稳定后再提取（避免多次 evaluate 之间 DOM 变化）
+          await frame.waitForTimeout(2000)
+
+          const result = await frame.evaluate((selector: string) => {
+            const items = document.querySelectorAll(selector)
+            const count = items.length
+            if (count < 1) return { count: 0, samples: [], data: [] }
+
+            const skipTitles = ['批量同意', '批量不同意', '流程委托', '流程管理', '接收时间', '发起人', '操作']
+            const samples: string[] = []
+            const data: any[] = []
+
+            for (let i = 0; i < items.length; i++) {
+              const el = items[i] as HTMLElement
+              const text = (el.innerText || '').trim()
+              if (!text || text.length < 3) continue
+              const lines = text.split('\n').map((l: string) => l.trim()).filter(Boolean)
+              const title = lines[0] || ''
+              if (!title || title.length < 2) continue
+
+              // 记录前 5 条原始内容用于调试
+              if (samples.length < 5) {
+                const link = el.querySelector('a') as HTMLAnchorElement | null
+                const href = link?.href?.substring(0, 80) || '(no-link)'
+                samples.push(`"${title.substring(0, 60)}" | href=${href}`)
+              }
+
+              if (skipTitles.includes(title)) continue
+
+              const link = el.querySelector('a') as HTMLAnchorElement | null
+              const href = link?.href || ''
+              // 北森是 SPA，行元素没有 data-id 等属性，用 href 作为唯一标识
+              const id = href || el.getAttribute('data-id') || el.getAttribute('data-key') || el.getAttribute('data-row-key') || ''
+
+              data.push({ fdId: id, title: title.substring(0, 100), num: lines[1] || '', cdate: lines[2] || '', url: href })
+            }
+
+            return { count, samples, data }
+          }, BEISEN_SELECTOR)
+
+          console.log(`[extractor] frame[${fi}] items=${result.count} data=${result.data.length} url=${frame.url().substring(0, 80)}`)
+          result.samples.forEach((s: string) => console.log(`  sample: ${s}`))
+
+          if (result.data.length > 0) {
+            result.data.slice(0, 3).forEach((w: any, i: number) => console.log(`  [${i}] "${w.title?.substring(0, 40)}" fdId="${(w.fdId || '').substring(0, 40) || 'EMPTY'}"`))
+            allIframeData = result.data
+            break
+          }
+        } catch (err: any) {
+          console.log(`[extractor] frame[${fi}] error:`, err.message?.substring(0, 60))
+        }
+      }
+
+      if (allIframeData.length > 0) {
+        const allWorkflows = allIframeData.map((item: any) => ({
+          platformId: platform.id, fdId: item.fdId || '', title: item.title || '',
+          docNumber: item.num || '', createDate: item.cdate || '', endDate: '',
+          status: '', currentStep: '', currentHandler: '', url: item.url || ''
+        }))
+        console.log('[extractor] extraction done, workflows:', allWorkflows.length)
+        await browser.close()
+        return { workflows: allWorkflows }
+      }
+      console.log('[extractor] 北森: no workflow data found in any frame')
     } else {
-      await page.goto(workflowUrl, { waitUntil: 'domcontentloaded', timeout: 15000 })
+      // OA: navigate to workflowUrl
+      const workflowUrl = platform.workflowUrl.replace(/ticket=[^&#]+&?/, '')
+      const baseUrl = workflowUrl.split('#')[0]
+      if (!currentUrl.startsWith(baseUrl)) {
+        console.log('[extractor] navigating to workflowUrl')
+        await page.goto(workflowUrl, { waitUntil: 'domcontentloaded', timeout: 15000 })
+      }
+
+      // Wait for table to load
       await page.waitForTimeout(3000)
+      for (let i = 0; i < 8; i++) {
+        const state = await page.evaluate(() => {
+          const table = document.querySelector('table.lui_listview_columntable_table')
+          if (!table) return { found: false }
+          const rows = table.querySelectorAll('tr')
+          return { found: true, rows: rows.length }
+        })
+        if (state.found) break
+        await page.waitForTimeout(1500)
+      }
     }
 
     // Step 4: Extract data from all pages
     const allWorkflows = await extractAllPages(page, platform)
 
     console.log('[extractor] extraction done, workflows:', allWorkflows.length)
+    // Debug: log first 5 items
+    allWorkflows.slice(0, 5).forEach((w, i) => {
+      console.log(`[extractor] [${i}] title="${w.title?.substring(0, 50)}" fdId="${w.fdId || 'EMPTY'}"`)
+    })
     await browser.close()
     return { workflows: allWorkflows }
   } catch (err: any) {
@@ -148,7 +266,7 @@ async function performLogin(page: Page, account: Account): Promise<void> {
   const isBeisen = pageUrl.includes('italent.cn')
 
   if (isBeisen) {
-    // ---- 北森: switch to password mode + keyboard simulation ----
+    // ---- 北森: switch to password mode ----
     try {
       const switchBtn = page.locator('text=切换到密码验证')
       if (await switchBtn.isVisible({ timeout: 2000 })) {
@@ -157,66 +275,54 @@ async function performLogin(page: Page, account: Account): Promise<void> {
         await page.waitForTimeout(2000)
         usernameInput = await page.$('input[placeholder*="用户名"]') || await page.$('input[type="text"]')
         passwordInput = await page.$('input[type="password"]')
-        if (usernameInput) console.log('[performLogin] re-found username after mode switch')
-        if (passwordInput) console.log('[performLogin] re-found password after mode switch')
       }
     } catch { /* not found, skip */ }
 
-    // Keyboard simulation (React compatible, 北森 must use this)
-    if (usernameInput) {
-      await usernameInput.click()
-      await page.waitForTimeout(100)
-      await page.keyboard.down('Meta')
-      await page.keyboard.press('a')
-      await page.keyboard.up('Meta')
-      await page.keyboard.press('Backspace')
-      await page.waitForTimeout(100)
-      await page.keyboard.type(account.username, { delay: 80 })
-    }
-    if (passwordInput) {
-      await passwordInput.click()
-      await page.waitForTimeout(100)
-      await page.keyboard.down('Meta')
-      await page.keyboard.press('a')
-      await page.keyboard.up('Meta')
-      await page.keyboard.press('Backspace')
-      await page.waitForTimeout(100)
-      await page.keyboard.type(account.password, { delay: 80 })
-    }
-    console.log('[performLogin] filled via keyboard simulation (北森)')
+    // Use nativeInputValueSetter (same as embedded browser, more reliable)
+    await page.evaluate(({ user, pass }) => {
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+      function setVal(el: HTMLInputElement, val: string) {
+        el.focus()
+        nativeSetter.call(el, val)
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+        el.dispatchEvent(new Event('blur', { bubbles: true }))
+      }
+      const u = document.querySelector('input[placeholder*="用户名"], input[type="text"]') as HTMLInputElement
+      const p = document.querySelector('input[type="password"]') as HTMLInputElement
+      if (u) setVal(u, user)
+      if (p) setVal(p, pass)
+    }, { user: account.username, pass: account.password })
+    console.log('[performLogin] filled via nativeInputValueSetter (北森)')
   } else {
-    // ---- OA 等标准系统: fill() 快速填充 ----
+    // ---- OA: fill() 快速填充 ----
     await usernameInput.fill(account.username)
     await passwordInput.fill(account.password)
     console.log('[performLogin] filled via fill() (fast)')
   }
 
-  await page.waitForTimeout(300)
+  await page.waitForTimeout(500)
 
-  // Check "agree to terms" checkbox using Playwright locator
+  // Check "agree to terms" checkbox
   try {
     const checkboxLoc = page.locator('input[type="checkbox"]').first()
     if (await checkboxLoc.isVisible({ timeout: 1000 })) {
       const isChecked = await checkboxLoc.isChecked()
       if (!isChecked) {
         await checkboxLoc.check({ force: true })
-        console.log('[performLogin] checkbox checked via Playwright')
-      } else {
-        console.log('[performLogin] checkbox already checked')
+        console.log('[performLogin] checkbox checked')
       }
     }
-  } catch (err) {
-    console.warn('[performLogin] checkbox error:', err)
-  }
+  } catch { /* no checkbox */ }
 
   // Submit login
   if (isBeisen) {
-    // 北森: press Enter (button click unreliable)
-    console.log('[performLogin] pressing Enter to submit (北森)')
+    // 北森: press Enter
     if (passwordInput) await passwordInput.press('Enter')
+    console.log('[performLogin] pressed Enter (北森)')
     await page.waitForTimeout(5000)
   } else {
-    // OA: try button click first, fallback to Enter
+    // OA: try button click, fallback to Enter
     let clicked = false
     try {
       const loginBtn = page.locator('button:has-text("登录"), input[type="submit"], button[type="submit"]').first()
