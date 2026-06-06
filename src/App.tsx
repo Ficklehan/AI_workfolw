@@ -29,9 +29,12 @@ export default function App() {
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw' }}>
       <Sidebar />
-      <main style={{ flex: 1, minWidth: 0, overflow: 'auto', paddingTop: 38 }}>
-        <div className="titlebar-drag" style={{ position: 'fixed', top: 0, left: 220, right: 0, zIndex: 50 }} />
-        <div style={{ padding: '52px 24px 24px', width: '100%' }}>
+      <main style={{
+        flex: 1, minWidth: 0, overflow: 'auto',
+        background: 'var(--bg-page)',
+      }}>
+        <div className="titlebar-drag" />
+        <div style={{ padding: '6px 28px 28px', width: '100%' }}>
           {renderPage()}
         </div>
       </main>

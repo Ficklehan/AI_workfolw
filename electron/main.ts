@@ -22,7 +22,12 @@ function createWindow() {
     minHeight: 600,
     title: 'WorkflowAI',
     titleBarStyle: 'hiddenInset',
+    vibrancy: 'under-window',
+    visualEffectState: 'active',
+    transparent: true,
+    backgroundColor: '#00000000',
     trafficLightPosition: { x: 16, y: 16 },
+    icon: path.join(__dirname, '../../icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -35,6 +40,16 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'))
   }
+}
+
+// Strip quarantine from native .node modules on first launch
+// (macOS applies com.apple.quarantine to downloaded apps, which prevents
+//  native modules from loading)
+if (process.platform === 'darwin') {
+  const { execSync } = require('child_process')
+  try {
+    execSync('xattr -dr com.apple.quarantine "' + app.getPath('exe').replace('/MacOS/WorkflowAI', '') + '" 2>/dev/null || true', { timeout: 3000 })
+  } catch { /* ignore - app may already be unquarantined */ }
 }
 
 app.whenReady().then(async () => {
@@ -190,6 +205,7 @@ function registerIPC() {
         width: 1280,
         height: 800,
         title: `${account.name} - 流程详情`,
+        icon: path.join(__dirname, '../../icon.png'),
         webPreferences: {
           session: ses,
           contextIsolation: true,

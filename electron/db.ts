@@ -238,7 +238,7 @@ export function syncWorkflowsForPlatform(
     const old = existingMap.get(wKey)
     if (old) {
       // Update if any field changed
-      const changed = old.title !== w.title || old.status !== w.status ||
+      const changed = old.title !== w.title || old.status !== w.status || old.url !== w.url ||
                       old.currentStep !== w.currentStep || old.currentHandler !== w.currentHandler
       if (changed) {
         Object.assign(old, w, { extractedAt: now })

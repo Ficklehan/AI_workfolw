@@ -8,9 +8,9 @@ const statusIcons: Record<string, any> = {
 }
 
 const statusColors: Record<string, string> = {
-  success: 'var(--success)',
-  failed: 'var(--danger)',
-  running: 'var(--accent)',
+  success: '#30D158',
+  failed: '#FF453A',
+  running: '#0A84FF',
 }
 
 export default function Logs() {
@@ -23,33 +23,25 @@ export default function Logs() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <div>
-          <h2 style={{ fontSize: 20, fontWeight: 700 }}>执行日志</h2>
+          <h2 style={{ fontSize: 20, fontWeight: 600 }}>执行日志</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4 }}>最近 {logs.length} 条记录</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn-secondary" onClick={loadLogs} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button className="btn-secondary" onClick={loadLogs} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
             <RefreshCw size={14} /> 刷新
           </button>
           {logs.length > 0 && (
-            <button
-              onClick={handleClear}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 4,
-                padding: '6px 12px', borderRadius: 6,
-                background: 'rgba(239,68,68,0.1)', color: 'var(--danger)',
-                border: '1px solid rgba(239,68,68,0.3)', cursor: 'pointer',
-                fontSize: 13, transition: 'all 0.2s'
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.background = 'rgba(239,68,68,0.2)'
-                e.currentTarget.style.borderColor = 'var(--danger)'
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.background = 'rgba(239,68,68,0.1)'
-                e.currentTarget.style.borderColor = 'rgba(239,68,68,0.3)'
-              }}
+            <button onClick={handleClear} style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '6px 14px', borderRadius: 'var(--radius-md)',
+              background: 'transparent', color: 'var(--danger)',
+              border: '1px solid rgba(255,69,58,0.25)', cursor: 'pointer',
+              fontSize: 13, fontWeight: 500, transition: 'all 0.15s ease',
+            }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,69,58,0.1)'; e.currentTarget.style.borderColor = 'rgba(255,69,58,0.5)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(255,69,58,0.25)' }}
             >
               <Trash2 size={14} /> 清空日志
             </button>
@@ -58,28 +50,38 @@ export default function Logs() {
       </div>
 
       {logs.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
-          <Clock size={40} style={{ marginBottom: 12, opacity: 0.3 }} />
-          <p style={{ fontSize: 14 }}>暂无执行记录</p>
+        <div style={{ textAlign: 'center', padding: 64, color: 'var(--text-secondary)' }}>
+          <div style={{
+            width: 56, height: 56, borderRadius: 16,
+            background: 'var(--bg-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            margin: '0 auto 16px',
+          }}>
+            <Clock size={24} style={{ opacity: 0.2 }} />
+          </div>
+          <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)' }}>暂无执行记录</p>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
           {logs.map(log => {
             const Icon = statusIcons[log.status] || Clock
             const color = statusColors[log.status] || 'var(--text-secondary)'
             return (
               <div key={log.id} className="card" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 16px' }}>
-                <Icon size={16} style={{ color, flexShrink: 0, marginTop: 2 }} />
+                <div style={{
+                  width: 28, height: 28, borderRadius: 'var(--radius-sm)',
+                  background: `${color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  flexShrink: 0, marginTop: 1,
+                }}>
+                  <Icon size={14} style={{ color }} />
+                </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                     <span style={{ fontWeight: 600, fontSize: 13 }}>{log.action}</span>
-                    <span className={`badge ${log.status === 'success' ? 'badge-success' : log.status === 'failed' ? 'badge-danger' : 'badge-info'}`}>
-                      {log.status}
-                    </span>
+                    <span className={`badge ${log.status === 'success' ? 'badge-success' : log.status === 'failed' ? 'badge-danger' : 'badge-info'}`}>{log.status}</span>
                   </div>
-                  <p style={{ fontSize: 12, color: 'var(--text-secondary)', wordBreak: 'break-all' }}>{log.message}</p>
+                  <p style={{ fontSize: 12, color: 'var(--text-secondary)', wordBreak: 'break-all', lineHeight: 1.5 }}>{log.message}</p>
                 </div>
-                <span style={{ fontSize: 11, color: 'var(--text-secondary)', flexShrink: 0 }}>{log.createdAt}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>{log.createdAt}</span>
               </div>
             )
           })}

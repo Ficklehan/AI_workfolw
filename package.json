@@ -1,7 +1,7 @@
 {
   "name": "workflow-ai",
-  "version": "1.0.0",
-  "description": "OA Workflow AI Assistant - 智能流程待办管理",
+  "version": "1.0.1",
+  "description": "OA Workflow AI Assistant - \u667a\u80fd\u6d41\u7a0b\u5f85\u529e\u7ba1\u7406",
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev": "concurrently -n vite,tsc \"vite\" \"tsc -p tsconfig.electron.json --watch\"",
@@ -23,7 +23,8 @@
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "entitlements.mac.plist",
-      "entitlementsInherit": "entitlements.mac.plist"
+      "entitlementsInherit": "entitlements.mac.plist",
+      "icon": "icon.icns"
     },
     "directories": {
       "output": "release"
@@ -31,11 +32,11 @@
     "files": [
       "dist-electron/**/*",
       "dist/**/*"
-    ]
+    ],
+    "afterPack": "./scripts/afterPack.js"
   },
   "dependencies": {
     "lucide-react": "^0.500.0",
-    "playwright": "^1.52.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "uuid": "^11.0.0",
