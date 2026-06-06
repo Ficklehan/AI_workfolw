@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('api', {
   // Open URL
   openUrl: (url: string) => ipcRenderer.invoke('open:url', url),
   openUrlWithAuth: (platformId: string, workflowUrl: string) => ipcRenderer.invoke('open:urlWithAuth', platformId, workflowUrl),
+  removeWorkflow: (platformId: string, workflowKey: string) => ipcRenderer.invoke('workflows:remove', platformId, workflowKey),
 
   // Events
   onWorkflowsUpdated: (cb: () => void) => {

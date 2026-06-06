@@ -219,9 +219,9 @@ async function performLogin(win: BrowserWindow, account: Account): Promise<void>
   console.log('[performLogin] result:', result)
 
   if (isBeisen) {
-    await delay(5000)
-  } else {
     await delay(2000)
+  } else {
+    await delay(1500)
   }
 
   console.log('[performLogin] after login, URL:', win.webContents.getURL().substring(0, 100))
@@ -264,8 +264,24 @@ async function extractBeisen(win: BrowserWindow, platform: Platform): Promise<Ex
   console.log('[extractor] 北森: navigating to workflowUrl')
   await loadUrl(win, platform.workflowUrl, 30000)
 
-  // Wait for SPA to load and API calls to complete
-  await delay(15000)
+  // Smart wait: resolve when QueryTodo response is captured, or timeout at 10s
+  await new Promise<void>((resolve) => {
+    let resolved = false
+    const check = () => {
+      if (!resolved && capturedIds.some(id => id.url.toLowerCase().includes('querytodo'))) {
+        resolved = true
+        // Give SPA 1.5s to finish rendering after API response
+        setTimeout(resolve, 1500)
+      }
+    }
+    // Check on each new capture
+    const origPush = capturedIds.push.bind(capturedIds)
+    capturedIds.push = (...args) => { const r = origPush(...args); check(); return r }
+    // Timeout fallback
+    setTimeout(() => { if (!resolved) { resolved = true; resolve() } }, 10000)
+    // Also check existing captures (in case response arrived before this promise)
+    check()
+  })
 
   dbg.off('message', onMessage)
 
@@ -326,12 +342,12 @@ async function extractOA(
 
   // Wait for table to load
   await delay(3000)
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 10; i++) {
     const found = await safeExecuteJavaScript(win, 
       `!!document.querySelector('table.lui_listview_columntable_table')`
     )
     if (found) break
-    await delay(1500)
+    await delay(800)
   }
 
   return await extractViaDOM(win, platform)
@@ -359,7 +375,7 @@ async function extractAllPages(
   const maxPages = 50
 
   for (let pageNum = 0; pageNum < maxPages; pageNum++) {
-    await delay(3000)
+    await delay(1500)
 
     const pageData = await extractPageData(win, platform.urlPattern)
     if (pageData.length === 0) break
@@ -477,6 +493,11 @@ async function extractPageData(
 
           const id = el.getAttribute('data-id') || el.getAttribute('data-key') || el.id || '';
 
+          // Filter out navigation/menu items: require a real workflow link or meaningful id
+          const isNavId = !id || /^(search|filter|nav|menu|tab|btn|all|create)/i.test(id)
+          const hasLink = href && (href.includes('method=view') || href.includes('fdId=') || href.includes('/review/'))
+          if (isNavId && !hasLink) continue
+
           results.push({
             fdId: id,
             title: title.substring(0, 100),
@@ -592,7 +613,7 @@ function parseBeisenApiResponses(
   platform: Platform
 ): Omit<Workflow, 'id' | 'extractedAt' | 'llmSummary'>[] {
 
-  const titleKeys = ['processName', 'title', 'name', 'flowName', 'workflowName', 'subTitle']
+  const titleKeys = ['content', 'processName', 'title', 'name', 'flowName', 'workflowName', 'subTitle']
   const idKeys = ['taskId', 'workflowId', 'id', 'processId', 'requestId', 'businessId', 'todoId', 'approvalTaskId', 'objId']
   const urlKeys = ['linkUrl', 'url', 'href', 'detailUrl']
   const numKeys = ['businessCode', 'docNumber', 'code', 'flowCode', 'processCode']
@@ -680,10 +701,28 @@ function parseBeisenApiResponses(
               ? platform.urlPattern.replace('{fdId}', pick(item, idKeys))
               : ''
           }
+          // Build composite title: "{userName}{subTitle}{content}" e.g. "张三提交的人事专员招聘需求审批"
+          const rawContent = pick(item, ['content'])
+          const rawSubTitle = pick(item, ['subTitle'])
+          let userName = ''
+          try {
+            const userObj = typeof item.user === 'string' ? JSON.parse(item.user) : item.user
+            userName = userObj?.name || ''
+          } catch {}
+          // Compose: prefer "{name}{subTitle}{content}" when content exists
+          let composedTitle = ''
+          if (rawContent) {
+            if (userName && rawSubTitle) composedTitle = userName + rawSubTitle + rawContent
+            else if (rawSubTitle) composedTitle = rawSubTitle + rawContent
+            else if (userName) composedTitle = userName + '提交的' + rawContent
+            else composedTitle = rawContent
+          }
+          const finalTitle = composedTitle || pick(item, titleKeys)
+
           return {
             platformId: platform.id,
             fdId: pick(item, idKeys),
-            title: pick(item, titleKeys),
+            title: finalTitle,
             docNumber: pick(item, numKeys),
             createDate: pick(item, cdateKeys),
             endDate: pick(item, edateKeys),

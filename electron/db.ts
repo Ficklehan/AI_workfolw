@@ -58,6 +58,7 @@ export function initDB() {
   migrateEncrypt()
   cleanupOrphanedWorkflows()
   migrateUrlPatterns()
+  cleanupStaleLogs()
 }
 
 /** Encrypt any plaintext passwords/API keys left from before encryption was added */
@@ -107,6 +108,19 @@ function migrateUrlPatterns() {
         w.url = correctUrl
         changed = true
       }
+    }
+  }
+  if (changed) save()
+}
+
+/** Mark any stale "running" logs as failed (leftover from crashed extraction) */
+function cleanupStaleLogs() {
+  let changed = false
+  for (const log of data.executionLogs) {
+    if (log.status === 'running') {
+      log.status = 'failed'
+      log.message = log.message + ' (进程中断)'
+      changed = true
     }
   }
   if (changed) save()
@@ -304,3 +318,19 @@ export function getScheduleConfig(): ScheduleConfig {
   return raw ? JSON.parse(raw) : { enabled: false, intervalMinutes: 30 }
 }
 export function setScheduleConfig(config: ScheduleConfig) { setSetting('schedule', JSON.stringify(config)) }
+
+/** Remove a single workflow by platformId + key (fdId or url) */
+export function removeWorkflow(platformId: string, workflowKey: string): boolean {
+  const before = data.workflows.length
+  data.workflows = data.workflows.filter(w => {
+    if (w.platformId !== platformId) return true
+    // Match by primary key (fdId for OA, url for Beisen) OR by url directly
+    const key = w.fdId || w.url || ''
+    if (key === workflowKey) return false
+    if (w.url && w.url === workflowKey) return false
+    return true
+  })
+  const removed = before > data.workflows.length
+  if (removed) save()
+  return removed
+}

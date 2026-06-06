@@ -145,6 +145,11 @@ function registerIPC() {
   // ---- Logs ----
   ipcMain.handle('logs:list', (_, limit?) => db.getLogs(limit))
   ipcMain.handle('logs:clear', () => { db.clearLogs(); return { success: true } })
+  ipcMain.handle('workflows:remove', (_, platformId: string, workflowKey: string) => {
+    const removed = db.removeWorkflow(platformId, workflowKey)
+    if (removed) mainWindow?.webContents.send('workflows-updated')
+    return { removed }
+  })
   // ---- Schedule ----
   ipcMain.handle('schedule:get', () => db.getScheduleConfig())
   ipcMain.handle('schedule:set', (_, config: ScheduleConfig) => {
@@ -374,14 +379,121 @@ function registerIPC() {
         }, waitMs)
       })
 
-      // Scenario 2: when user closes the window, re-extract this platform to sync status
-      win.on('closed', () => {
-        console.log('[open:urlWithAuth] window closed, re-extracting platform:', platform.name)
-        runPlatformExtraction(platform.id).then(() => {
-          console.log('[open:urlWithAuth] platform re-extracted after window close')
-        }).catch((err) => {
-          console.error('[open:urlWithAuth] re-extract error:', err.message)
+      // ---- Track API calls for approval detection ----
+      const workflowKey = workflowUrl
+      const approvalApiHits: string[] = []
+      let workflowAlreadyRemoved = false
+      const isOaPlatform = platform.platformType === 'landray' || !platform.ssoUrl?.includes('italent.cn')
+
+      // For OA: extract the OA server domain from workflowUrl to capture its requests
+      let oaHost = ''
+      if (isOaPlatform) {
+        try { oaHost = new URL(workflowUrl).hostname } catch {}
+      }
+      console.log('[monitor] platform type:', isOaPlatform ? 'OA/Landray' : 'Beisen', oaHost ? 'oaHost=' + oaHost : '')
+
+      /** Helper: resolve workflow key and remove from DB, notify renderer */
+      function tryRemoveWorkflow(reason: string) {
+        if (workflowAlreadyRemoved) {
+          console.log('[monitor] workflow already removed, skip (' + reason + ')')
+          return
+        }
+        console.log('[monitor] approval action detected (' + reason + '), removing workflow')
+        console.log('[monitor] platformId:', platformId.substring(0, 8), 'workflowKey:', workflowKey.substring(0, 100))
+
+        const allWorkflows = db.getWorkflows()
+        const target = allWorkflows.find(w =>
+          w.platformId === platformId && (w.url === workflowKey || w.fdId === workflowKey)
+        )
+        const removeKey = target ? (target.fdId || target.url || workflowKey) : workflowKey
+        console.log('[monitor] resolved removeKey:', removeKey.substring(0, 100), 'found:', !!target)
+
+        const removed = db.removeWorkflow(platformId, removeKey)
+        console.log('[monitor] removeWorkflow result:', removed)
+        if (removed) {
+          workflowAlreadyRemoved = true
+          db.addLog(platformId, 'monitor', 'success', '流程已处理，已从待办移除')
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('workflows-updated')
+            console.log('[monitor] workflows-updated event sent to renderer')
+          } else {
+            console.log('[monitor] WARNING: mainWindow is null or destroyed')
+          }
+        } else {
+          console.log('[monitor] WARNING: removeWorkflow returned false — key mismatch')
+        }
+      }
+
+      /** Check if a captured request is an approval submission endpoint */
+      function isApprovalEndpoint(url: string): boolean {
+        if (isOaPlatform) {
+          // OA/Landray EKP approval patterns
+          if (url.includes('method=approve') || url.includes('method=agree')) return true
+          if (url.includes('method=reject') || url.includes('method=disagree')) return true
+          if (url.includes('method=finish') || url.includes('method=complete')) return true
+          if (url.includes('method=submitto')) return true
+          // Generic form-based approval
+          if (url.includes('km_review_main') && url.includes('method=')) return true
+          return false
+        }
+        // Beisen approval patterns
+        if (url.includes('processhandle') || url.includes('handletask')) return true
+        if (url.includes('/wf/') && (url.includes('complete') || url.includes('submit') || url.includes('reject'))) return true
+        if (url.includes('approve') || url.includes('approval')) return true
+        if (url.includes('todo') && url.includes('handle')) return true
+        if (url.includes('/bpm/') && (url.includes('complete') || url.includes('submit') || url.includes('reject'))) return true
+        return false
+      }
+
+      /** Check if a request URL belongs to the monitored platform */
+      function isPlatformRequest(reqUrl: string): boolean {
+        if (isOaPlatform) {
+          return oaHost !== '' && reqUrl.includes(oaHost)
+        }
+        return reqUrl.includes('italent') || reqUrl.includes('beisen')
+      }
+
+      let cdpSession: any = null
+      try {
+        cdpSession = win.webContents.debugger
+        cdpSession.attach('1.3')
+        cdpSession.on('message', (_: any, method: string, params: any) => {
+          if (method === 'Network.requestWillBeSent') {
+            const reqUrl = (params.request?.url || '').toLowerCase()
+            const methodType = (params.request?.method || '').toUpperCase()
+            // Capture POST/PUT requests to the relevant platform
+            if ((methodType === 'POST' || methodType === 'PUT' || (isOaPlatform && methodType === 'GET')) &&
+                isPlatformRequest(reqUrl)) {
+              approvalApiHits.push(reqUrl)
+              console.log('[monitor] ' + methodType + ' captured:', reqUrl.substring(0, 100))
+
+              // Mechanism 1: Real-time — remove immediately when approval endpoint is hit
+              if (!workflowAlreadyRemoved && isApprovalEndpoint(reqUrl)) {
+                tryRemoveWorkflow('real-time CDP')
+              }
+            }
+          }
         })
+        cdpSession.sendCommand('Network.enable')
+        console.log('[monitor] CDP network monitoring started')
+      } catch (err: any) {
+        console.warn('[monitor] CDP attach failed:', err.message?.substring(0, 60))
+      }
+
+      // Mechanism 2: Fallback — on window close, scan all captured requests
+      win.on('closed', async () => {
+        try { cdpSession?.detach() } catch {}
+
+        console.log('[monitor] window closed, POST count:', approvalApiHits.length)
+
+        if (!workflowAlreadyRemoved) {
+          const hasApprovalAction = approvalApiHits.some(url => isApprovalEndpoint(url))
+          if (hasApprovalAction) {
+            tryRemoveWorkflow('window closed fallback')
+          } else {
+            console.log('[monitor] no approval action detected, keeping workflow')
+          }
+        }
       })
 
       return { success: true }
@@ -393,63 +505,62 @@ function registerIPC() {
 
 async function runAllExtractions(): Promise<{ success: number; failed: number; total: number }> {
   const accounts = db.getAccounts()
-  let success = 0, failed = 0, total = 0
 
-  // Count total platforms
-  let totalCount = 0
+  // Build flat list of (account, platform) pairs
+  const tasks: Array<{ account: Account; platform: Platform }> = []
   for (const account of accounts) {
-    totalCount += db.getPlatforms(account.id).length
+    const platforms = db.getPlatforms(account.id)
+    for (const platform of platforms) {
+      tasks.push({ account, platform })
+    }
   }
+  const totalCount = tasks.length
 
-  // Clean up orphaned workflows (platformId no longer exists)
+  // Clean up orphaned workflows
   const validPlatformIds = new Set(db.getPlatforms().map(p => p.id))
   const orphaned = db.removeOrphanedWorkflows(validPlatformIds)
   if (orphaned > 0) console.log('[extract] cleaned up orphaned workflows:', orphaned)
 
   let current = 0
-  for (const account of accounts) {
-    // Read fresh platform data each iteration (user may have changed config)
-    const platforms = db.getPlatforms(account.id)
-    for (const platform of platforms) {
-      current++
-      total++
-      const progress = { current, total: totalCount, account: account.name, platform: platform.name }
-      mainWindow?.webContents.send('extraction-progress', progress)
-      try {
-        // Re-read platform config fresh (user may have changed URL etc.)
-        const freshPlatform = db.getPlatforms().find(p => p.id === platform.id) || platform
-        console.log('[extract] using workflowUrl:', freshPlatform.workflowUrl?.substring(0, 80))
-        db.addLog(freshPlatform.id, 'extract', 'running', `正在提取 ${account.name} - ${freshPlatform.name}...`)
-        const result = await extractWorkflows(account, freshPlatform)
+  let success = 0, failed = 0
 
-        if (result.error) {
-          db.addLog(platform.id, 'extract', 'failed', result.error)
-          failed++
-          continue
-        }
+  // Run all platform extractions in parallel
+  const results = await Promise.allSettled(tasks.map(async ({ account, platform }) => {
+    const idx = ++current
+    const progress = { current: idx, total: totalCount, account: account.name, platform: platform.name }
+    mainWindow?.webContents.send('extraction-progress', progress)
 
-        // Incremental sync: add new, update changed, remove approved
-        // 北森用 url 做标识（SPA 无 fdId），蓝凌用 fdId
-        const isBeisenPlatform = freshPlatform.platformType === 'beisen' || freshPlatform.ssoUrl?.includes('italent.cn')
-        const validWorkflows = isBeisenPlatform
-          ? result.workflows.filter(w => w.fdId || w.url)
-          : result.workflows.filter(w => w.fdId)
-        const syncResult = db.syncWorkflowsForPlatform(platform.id, validWorkflows)
-        db.addLog(platform.id, 'extract', 'success',
-          `同步完成: 新增${syncResult.added} 更新${syncResult.updated} 移除${syncResult.removed}，共${result.workflows.length}条`)
-        success++
-      } catch (err: any) {
-        db.addLog(platform.id, 'extract', 'failed', err.message)
+    try {
+      const freshPlatform = db.getPlatforms().find(p => p.id === platform.id) || platform
+      console.log('[extract] using workflowUrl:', freshPlatform.workflowUrl?.substring(0, 80))
+      db.addLog(freshPlatform.id, 'extract', 'running', `正在提取 ${account.name} - ${freshPlatform.name}...`)
+      const result = await extractWorkflows(account, freshPlatform)
+
+      if (result.error) {
+        db.addLog(platform.id, 'extract', 'failed', result.error)
         failed++
+        return
       }
+
+      const isBeisenPlatform = freshPlatform.platformType === 'beisen' || freshPlatform.ssoUrl?.includes('italent.cn')
+      const validWorkflows = isBeisenPlatform
+        ? result.workflows.filter(w => w.fdId || w.url)
+        : result.workflows.filter(w => w.fdId)
+      const syncResult = db.syncWorkflowsForPlatform(platform.id, validWorkflows)
+      db.addLog(platform.id, 'extract', 'success',
+        `同步完成: 新增${syncResult.added} 更新${syncResult.updated} 移除${syncResult.removed}，共${result.workflows.length}条`)
+      success++
+    } catch (err: any) {
+      db.addLog(platform.id, 'extract', 'failed', err.message)
+      failed++
     }
-  }
+  }))
 
   db.addLog(null, 'extract-batch', success > 0 ? 'success' : 'failed',
-    `完成: ${success}/${total} 成功, ${failed} 失败`)
+    `完成: ${success}/${totalCount} 成功, ${failed} 失败`)
 
   mainWindow?.webContents.send('workflows-updated')
-  return { success, failed, total }
+  return { success, failed, total: totalCount }
 }
 
 async function runPlatformExtraction(platformId: string) {

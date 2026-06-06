@@ -54,13 +54,10 @@ export default function Sidebar() {
           fontSize: 15, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8,
           color: 'var(--text-primary)', letterSpacing: '-0.01em',
         }}>
-          <div style={{
+          <img src="/icon.png" alt="W" style={{
             width: 26, height: 26, borderRadius: 6,
-            background: '#0A84FF',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 13, color: 'white', fontWeight: 700,
-          }}>W</div>
-          WorkflowAI
+          }} />
+          HRAS AI岛
         </h1>
       </div>
 

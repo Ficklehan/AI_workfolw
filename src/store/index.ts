@@ -28,6 +28,7 @@ declare global {
       setSchedule: (config: ScheduleConfig) => Promise<ScheduleConfig>
       openUrl: (url: string) => Promise<void>
       openUrlWithAuth: (platformId: string, workflowUrl: string) => Promise<{ success: boolean; error?: string }>
+      removeWorkflow: (platformId: string, workflowKey: string) => Promise<{ removed: boolean }>
       onWorkflowsUpdated: (cb: () => void) => () => void
       onExtractionComplete: (cb: () => void) => () => void
       onExtractionProgress: (cb: (data: { current: number; total: number; account: string; platform: string }) => void) => () => void
@@ -51,7 +52,8 @@ interface AppState {
   loadWorkflows: () => Promise<void>
   loadLogs: () => Promise<void>
   setExtracting: (v: boolean) => void
-  clearLogs: () => Promise<void>}
+  clearLogs: () => Promise<void>
+}
 
 export const useStore = create<AppState>((set, get) => ({
   accounts: [],
